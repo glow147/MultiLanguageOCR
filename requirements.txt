@@ -1,0 +1,13 @@
+tokenizers==0.15.0
+torch==1.13.1
+torchelastic==0.2.2
+torchmetrics==1.2.1
+torchtext==0.14.1
+torchvision==0.14.1
+transformers==4.36.1
+ultralytics==8.0.227
+pytorch-lightning==2.1.2
+lightning==2.1.2
+PyYAML==6.0
+ray==2.8.1
+opencv-python==4.8.1.78

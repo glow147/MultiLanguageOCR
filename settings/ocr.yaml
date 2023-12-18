@@ -1,0 +1,15 @@
+path: ../coco_converted  # dataset root dir
+train: images/train # train images (relative to 'path') 118287 images
+val: images/valid  # val images (relative to 'path') 5000 images
+test: images/test  # 20288 of 40670 images, submit to https://competitions.codalab.org/competitions/20794
+
+hyp:
+  mixup: 0.0
+  copy_paste: 0.0
+
+names :
+  0 : K
+  1 : C
+  2 : J
+  3 : E
+  4 : M
