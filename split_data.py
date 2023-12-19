@@ -109,13 +109,6 @@ def json2coco(data_list, global_vars, id_generator, link_path, crop_image_path):
             with json_file.open("r") as f:
                 anno = json.load(f)
 
-            image = {
-                "id" : image_id,
-                "file_name" : anno['Images']['file_name'],
-                "width": anno["Images"]["width"],
-                "height": anno["Images"]["height"]
-            }
-
             image_source = str(json_file.parent / anno['Images']['file_name'])
             out_source = link_path / anno['Images']['file_name']
             if out_source.suffix == '.dng':
@@ -131,42 +124,48 @@ def json2coco(data_list, global_vars, id_generator, link_path, crop_image_path):
     
             img.save(out_source)
             # shutil.copy(image_source, out_source)
+            image = {
+                "id" : image_id,
+                "file_name" : anno['Images']['file_name'],
+                "width": anno["Images"]["width"] * ratio_x,
+                "height": anno["Images"]["height"] * ratio_y
+            }
 
             # link_name = link_path / anno['Images']['file_name']
             # os.symlink(image_source, link_name)
+            for bbox in anno["Annotation"]:
+                try:
+                    anno_id = ray.get(id_generator.get_annotation_id.remote())
+                    x_coords = [point[0] * ratio_x for point in bbox['polygon_points']]
+                    y_coords = [point[1] * ratio_y for point in bbox['polygon_points']]
+                    bounding_box = [min(x_coords), min(y_coords), max(x_coords), max(y_coords)]
+
+                    cropped_image = img.crop(bounding_box)
+
+                    annotation = {
+                        "id" : anno_id,
+                        "image_id" : image_id,
+                        "category_id" : token2categoryID[bbox['text_language']],
+                        "segmentation" : [[j for i in zip(x_coords, y_coords) for j in i]],
+                        "bbox" : bounding_box,
+                        "text" : bbox['text'],
+                        "iscrowd": 0
+                    }
+                    crop_dest_path = crop_image_path / f'{bbox["text_language"]}'
+                    crop_dest_path.mkdir(parents=True, exist_ok=True)
+
+                    cropped_image.save(crop_dest_path / f'{anno_id}.png')
+                    label = f'{anno_id}.png\t{bbox["text"]}'
+                    global_vars.update_cropped_data.remote(bbox['text_language'], label)
+
+                    local_anno_list.append(annotation)
+                except:
+                    continue
+            local_image_list.append(image)
         except:
             continue
 
-        for bbox in anno["Annotation"]:
-            try:
-                anno_id = ray.get(id_generator.get_annotation_id.remote())
-                x_coords = [point[0] * ratio_x for point in bbox['polygon_points']]
-                y_coords = [point[1] * ratio_y for point in bbox['polygon_points']]
-                bounding_box = [min(x_coords), min(y_coords), max(x_coords), max(y_coords)]
-
-                cropped_image = img.crop(bounding_box)
-
-                annotation = {
-                    "id" : anno_id,
-                    "image_id" : image_id,
-                    "category_id" : token2categoryID[bbox['text_language']],
-                    "segmentation" : [[j for i in zip(x_coords, y_coords) for j in i]],
-                    "bbox" : bounding_box,
-                    "text" : bbox['text'],
-                    "iscrowd": 0
-                }
-                crop_dest_path = crop_image_path / f'{bbox["text_language"]}'
-                crop_dest_path.mkdir(parents=True, exist_ok=True)
-
-                cropped_image.save(crop_dest_path / f'{anno_id}.png')
-                label = f'{anno_id}.png\t{bbox["text"]}'
-                global_vars.update_cropped_data.remote(bbox['text_language'], label)
-
-                local_anno_list.append(annotation)
-            except:
-                continue
-
-        local_image_list.append(image)
+        
 
     global_vars.update_data.remote(local_image_list, local_anno_list)
 
@@ -174,8 +173,10 @@ def json2coco(data_list, global_vars, id_generator, link_path, crop_image_path):
 
 base = Path('Path') # Input Your File Path
 link_path = Path('coco_converted/images')
+shutil.rmtree(link_path.parent)
 
 crop_image_path = Path('cropped_image')
+shutil.rmtree(crop_image_path)
 crop_image_path.mkdir(parents=True, exist_ok=True)
 
 # Load Json File Path
@@ -191,7 +192,7 @@ for p1 in base.glob('*'):
 
 random.shuffle(json_list)
 
-for data_list, file_name in split_dataset(json_list[:1000]):
+for data_list, file_name in split_dataset(json_list):
     global_vars = GlobalVars.remote()
     id_generator = IdGenerator.remote()
     step = len(data_list) // num_process + 1
