@@ -9,27 +9,16 @@ import torchvision.transforms as transforms
 from pathlib import Path
 from models.lightning_model import OcrModel
 from torch.utils.data import DataLoader
-from datasets.dataset import CustomImageDataset
+from datasets.dataset import CustomImageDataset, Custom_Collate
 
-torch.manual_seed(0)
-torch.cuda.manual_seed(0)
-random.seed(0)
+torch.manual_seed(4)
+torch.cuda.manual_seed(4)
+random.seed(4)
 torch.set_float32_matmul_precision('medium')
 
 train_transforms = transforms.Compose(
     [
         transforms.AutoAugment(transforms.AutoAugmentPolicy.SVHN),
-        transforms.Resize((112,224)),
-        transforms.ToTensor(),
-        transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
-    ]
-)
-
-valid_transforms = transforms.Compose(
-    [
-        transforms.Resize((112,224)),
-        transforms.ToTensor(),
-        transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
     ]
 )
 
@@ -80,13 +69,13 @@ def load_dataset(base_dir):
         total_len = len(data_list)
         train_size = int(total_len * 0.8)
         valid_size = int(total_len * 0.1)
-
+        random.shuffle(data_list)
         train_data = data_list[:train_size]
         valid_data = data_list[train_size:train_size + valid_size]
         test_data = data_list[train_size + valid_size:]
 
         train_dataset = CustomImageDataset(base_dir=base_dir, img_dir=label_file.stem, data_list = train_data, transform=train_transforms, dataset_type='train', regex=regex[label_file.stem], lang_dict=lang_dict)
-        valid_dataset = CustomImageDataset(base_dir=base_dir, img_dir=label_file.stem, data_list = valid_data, transform=valid_transforms, dataset_type='valid', regex=regex[label_file.stem], lang_dict=lang_dict)
+        valid_dataset = CustomImageDataset(base_dir=base_dir, img_dir=label_file.stem, data_list = valid_data, transform=None, dataset_type='valid', regex=regex[label_file.stem], lang_dict=lang_dict)
 
         dataset_dict['vocab'][label_file.stem] = train_dataset.get_vocab()
         if dataset_dict['train'] is None and dataset_dict['valid'] is None:
@@ -108,7 +97,6 @@ if __name__ == '__main__':
 
     formatted_time = datetime.datetime.now().strftime('%Y%m%d%H%M')
     save_setting(cfg, f'./settings/default_{formatted_time}.yaml')
-
     ocr_model = OcrModel(cfg)
 
     checkpoint_callback = L.pytorch.callbacks.ModelCheckpoint(
@@ -120,18 +108,18 @@ if __name__ == '__main__':
         save_weights_only=True,
         )
     
-    trainer = L.Trainer(accelerator='gpu', devices=torch.cuda.device_count(), 
+    trainer = L.Trainer(accelerator='gpu', devices=1, 
                          max_epochs=cfg['TRAIN_PARAMS']['EPOCHS'],
                          num_sanity_val_steps=0,
                          strategy='ddp',
-                         precision='16-mixed', benchmark=True, gradient_clip_algorithm='norm',
-                         callbacks=[checkpoint_callback])
+                         precision='16-mixed', gradient_clip_algorithm='norm',
+                         callbacks=[checkpoint_callback,])
 
     train_dataloader = DataLoader(dataset_dict['train'], batch_size=cfg['TRAIN_PARAMS']['BATCH_SIZE'], 
-                                  num_workers=8, shuffle=True)
+                                  num_workers=8, shuffle=True, collate_fn=Custom_Collate(imgH=cfg.DATA.IMAGE_SIZE[0], imgW=cfg.DATA.IMAGE_SIZE[1]))
 
     valid_datalodaer = DataLoader(dataset_dict['valid'], batch_size=cfg['TRAIN_PARAMS']['BATCH_SIZE'], 
-                                  num_workers=8, shuffle=False)
+                                  num_workers=8, shuffle=False, collate_fn=Custom_Collate(imgH=cfg.DATA.IMAGE_SIZE[0], imgW=cfg.DATA.IMAGE_SIZE[1]))
 
     trainer.fit(ocr_model, train_dataloaders=train_dataloader, 
                 val_dataloaders=valid_datalodaer)

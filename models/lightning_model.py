@@ -5,7 +5,7 @@ import torch.optim as optim
 from typing import Any, Dict
 from collections import defaultdict
 from lightning.pytorch import LightningModule
-from models.model import ResnetEncoder, TransformerDecoder
+from models.model import TransformerDecoder, SwinTransformerEncoder
 
 class OcrModel(LightningModule):
     def __init__(self, cfg):
@@ -15,23 +15,23 @@ class OcrModel(LightningModule):
         self.lang_dict = cfg['lang_dict']
         self.vocab = cfg['vocab']
 
-        self.feature_extractor = ResnetEncoder()
+        self.feature_extractor = SwinTransformerEncoder(cfg['DATA']['IMAGE_SIZE'], 4, 7)
         self.models_dict = {}
 
         for language in self.vocab.keys():
-            model = TransformerDecoder(output_dim=len(self.vocab[language]['token2id']), **cfg['MODEL_PARAMS'], activation='gelu')
+            model = TransformerDecoder(target_len=self.vocab[language]['max_length']+1, output_dim=len(self.vocab[language]['token2id']), **cfg['MODEL_PARAMS'], activation='gelu')
             self.models_dict[language] = model
         
         self.criterion = nn.CrossEntropyLoss(ignore_index=0)
-    
-    @torch.no_grad()
+
+    @torch.inference_mode()
     def forward(self, image, language):
         image_feature = self.feature_extractor(image)
         vocab = self.vocab[language]
         input_tokens = torch.ones(1, 1).fill_(vocab['token2id']['SOS']).long().to(image_feature.device)
         word = ''
         for i in range(vocab['max_length']):
-            out = self.models_dict[language](input_tokens, image_feature.transpose(1,2))
+            out = self.models_dict[language](input_tokens, image_feature)
             prob = out[:, -1]
             _, next_word = torch.max(prob, dim=1)
             
@@ -44,10 +44,13 @@ class OcrModel(LightningModule):
                 word += vocab['id2token'][str(next_word)]
 
         return word
-
     def decoder_eval(self):
         for language in self.models_dict:
             self.models_dict[language].eval()
+
+    def decoder_device(self, device):
+        for language in self.models_dict:
+             self.models_dict[language]= self.models_dict[language].to(device)
 
     def on_train_start(self):
         self.feature_extractor.train()
@@ -61,7 +64,7 @@ class OcrModel(LightningModule):
 
         models_optim[0].zero_grad()
         
-        images, input_tokens, labels, languages = batch
+        images, input_tokens, labels, languages,_ = batch
         image_features = self.feature_extractor(images)
         total_loss = 0
         loss_dict = defaultdict(lambda : [])
@@ -71,7 +74,7 @@ class OcrModel(LightningModule):
             language_mask = languages == language_num
             if torch.sum(language_mask) == 0:
                 continue
-            pred = self.models_dict[language](input_tokens[language_mask,], image_features[language_mask,].transpose(1,2))
+            pred = self.models_dict[language](input_tokens[language_mask,], image_features[language_mask,])
             loss = self.criterion(pred.view(-1, pred.shape[-1]), labels[language_mask, ].view(-1))
             self.manual_backward(loss, retain_graph=True)
             loss_dict[language] = loss.item()
@@ -79,13 +82,13 @@ class OcrModel(LightningModule):
             models_optim[language_num].step()
 
         models_optim[0].step()
-        self.log_dict(loss_dict, prog_bar=True, on_step=True)
 
+        self.log_dict(loss_dict, prog_bar=True, on_step=True)
         return {'loss' : total_loss}
 
-    @torch.no_grad()
+    @torch.inference_mode()
     def validation_step(self, batch, batch_idx):
-        images, input_tokens, labels, languages = batch
+        images, input_tokens, labels, languages,_ = batch
         image_features = self.feature_extractor(images)
         total_loss = 0
         loss_dict = defaultdict(lambda : [])
@@ -94,7 +97,7 @@ class OcrModel(LightningModule):
             language_mask = languages == language_num
             if torch.sum(language_mask) == 0:
                 continue
-            pred = self.models_dict[language](input_tokens[language_mask,], image_features[language_mask,].transpose(1,2))
+            pred = self.models_dict[language](input_tokens[language_mask,], image_features[language_mask,])
             loss = self.criterion(pred.view(-1, pred.shape[-1]), labels[language_mask, ].view(-1))
             loss_dict[language] = loss.item()
             total_loss += loss
@@ -116,8 +119,9 @@ class OcrModel(LightningModule):
         return super().on_save_checkpoint(checkpoint)
 
     def configure_optimizers(self):
-        models_optim = [0] * (len(self.models_dict) + 1) 
-        models_optim[0] = optim.AdamW(self.feature_extractor.parameters(), lr=5e-6)
+        models_optim = [0] * (len(self.models_dict) + 1)
+
+        models_optim[0] = optim.AdamW(self.feature_extractor.parameters(), lr=1e-4)
 
         for language in self.models_dict:
             models_optim[self.lang_dict['token2id'][language]] = optim.AdamW(self.models_dict[language].parameters(), lr=1e-4)

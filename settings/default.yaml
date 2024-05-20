@@ -1,14 +1,14 @@
 DATA:
-  IMAGE_SIZE: (112, 224)
+  IMAGE_SIZE: (112, 448)
   DIR: cropped_image
     
 TRAIN_PARAMS:
-  EPOCHS : 100
-  BATCH_SIZE : 1024
+  EPOCHS : 50
+  BATCH_SIZE : 512
     
 MODEL_PARAMS:
-  d_model : 512
+  d_model : 384
   nhead : 4
-  num_layers : 1
+  num_layers : 4
   dim_feedforward : 2048
   dropout : 0.1
